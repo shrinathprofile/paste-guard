@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paste Guard: a second pair of eyes before you paste into AI</title>
+<style>
+  :root {
+    --bg: #fbfaf7; --fg: #1d1d1b; --muted: #6b6a66; --line: #e4e2dc; --card: #ffffff;
+    --accent: #2f5d50; --pii-bg: #fde2e1; --pii-fg: #a4161a; --ok: #2f7d4f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161615; --fg: #ecebe7; --muted: #9b9a95; --line: #2c2b29; --card: #1f1e1c;
+            --accent: #7fb8a4; --pii-bg: #4a1d1f; --pii-fg: #ffb3b0; --ok: #7fcf9b; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 17px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 56px 20px 80px; }
+  h1 { font-size: 2.2rem; line-height: 1.15; margin: 0 0 12px; }
+  h2 { font-size: 1.3rem; margin: 56px 0 12px; }
+  p.lede { font-size: 1.15rem; color: var(--muted); margin: 0 0 8px; }
+  code, textarea, .out { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9rem; }
+  code { background: var(--line); padding: 1px 5px; border-radius: 4px; }
+  a { color: var(--accent); }
+  .note { border-left: 3px solid var(--accent); padding: 4px 14px; color: var(--muted); }
+
+  .demo { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+  textarea { width: 100%; min-height: 110px; padding: 12px; border: 1px solid var(--line); border-radius: 8px;
+             background: var(--bg); color: var(--fg); resize: vertical; }
+  .samples { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 0; }
+  .samples button { font: inherit; font-size: .85rem; padding: 4px 10px; border-radius: 999px; cursor: pointer;
+                    border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+  .samples button:hover { border-color: var(--accent); }
+  .label { font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 16px 0 6px; }
+  .out { white-space: pre-wrap; word-break: break-word; padding: 12px; border-radius: 8px; background: var(--bg);
+         border: 1px solid var(--line); min-height: 44px; }
+  mark { background: var(--pii-bg); color: var(--pii-fg); border-radius: 3px; padding: 0 2px; }
+  mark::after { content: attr(data-label); font-size: .65rem; margin-left: 4px; font-weight: 600; vertical-align: super; }
+  .verdict { margin-top: 12px; font-weight: 600; }
+  .verdict.ok { color: var(--ok); } .verdict.hit { color: var(--pii-fg); }
+
+  .flow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 16px 0; }
+  .step { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px; font-size: .9rem; }
+  .step b { display: block; margin-bottom: 4px; }
+  @media (max-width: 640px) { .flow { grid-template-columns: 1fr 1fr; } }
+
+  table { width: 100%; border-collapse: collapse; font-size: .95rem; }
+  th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: .85rem; }
+  s { color: var(--muted); }
+  ul { padding-left: 20px; }
+  footer { margin-top: 64px; color: var(--muted); font-size: .9rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Paste Guard</h1>
+  <p class="lede">A second pair of eyes before you paste into ChatGPT or Claude. One Python file, runs on your Mac, sends nothing anywhere.</p>
+  <p><a href="https://github.com/shrinathprofile/paste-guard">Source on GitHub</a></p>
+
+  <h2>Try it</h2>
+  <p>Type or paste below. This page runs the same checks as the app, in your browser, so nothing leaves this tab.</p>
+  <div class="demo">
+    <textarea id="input" spellcheck="false" aria-label="Text to check">Hi team, new contractor details for payroll. TFN 123 456 782, BSB: 062-000 account number 1234 5678, lives at 12 Rundle Street, Adelaide SA 5000. Call on 0412 345 678.</textarea>
+    <div class="samples" aria-label="Sample text">
+      <button data-s="BSB: 062-000 account number 1234 5678, ABN 51 824 753 556">Bank details</button>
+      <button data-s="Passport No. PA1234567, DOB: 03/04/1990, Driver licence 12345678">ID documents</button>
+      <button data-s="export OPENAI_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz123456 and github token ghp_abcdefghijklmnopqrstuvwxyz0123456789">Secrets</button>
+      <button data-s="Meeting moved to 3pm in room 12. Order 123456789 shipped, version 1.2.3.">Nothing sensitive</button>
+    </div>
+    <div class="label">What Paste Guard sees</div>
+    <div class="out" id="highlighted" aria-live="polite"></div>
+    <div class="verdict" id="verdict"></div>
+    <div class="label">After you click Redact</div>
+    <div class="out" id="redacted"></div>
+  </div>
+
+  <h2>How it works</h2>
+  <div class="flow">
+    <div class="step"><b>1. You copy</b>Checked every half second with macOS's <code>pbpaste</code>.</div>
+    <div class="step"><b>2. Checks run</b>Patterns, plus official check-digit maths for TFN, ABN, ACN and more.</div>
+    <div class="step"><b>3. Dialog</b>Lists <em>what kind</em> of data it found, never the text itself.</div>
+    <div class="step"><b>4. Redact</b>Swaps each match for a label like <code>[TFN]</code> on your clipboard.</div>
+  </div>
+
+  <h2>What I cut, and why</h2>
+  <p>The first design had a desktop app, a full PII library and an AI model. The shipped version is one file with no model.</p>
+  <table>
+    <tr><th>Planned</th><th>Shipped</th><th>Why</th></tr>
+    <tr><td><s>Desktop app (Tauri)</s></td><td>Terminal script</td><td>macOS already has a clipboard API and a dialog. No window needed yet.</td></tr>
+    <tr><td><s>Microsoft Presidio library</s></td><td>Its check-digit logic, about 10 lines</td><td>The library pulls in hundreds of MB of language tooling. The Australian checks are short maths.</td></tr>
+    <tr><td><s>Name-finding model</s></td><td>Nothing yet</td><td>A TFN has a check digit, so a model can't beat maths there. A model only earns its place where patterns can't reach, like names.</td></tr>
+  </table>
+
+  <h2>What it catches</h2>
+  <ul>
+    <li><b>Confirmed by check digit:</b> TFN, ABN, ACN, credit card, IBAN</li>
+    <li><b>By format:</b> email, Australian phone, Centrelink CRN, street address, state and postcode, IP address, API keys, JWT, private keys</li>
+    <li><b>By format, after a keyword:</b> BSB, bank account, passport, driver licence, date of birth</li>
+  </ul>
+
+  <h2>What it misses</h2>
+  <ul>
+    <li>Names. No pattern can tell a name from ordinary words.</li>
+    <li>About 1 in 10 random 9-digit numbers pass the TFN or ACN check, so expect the odd false alarm.</li>
+    <li>It warns when you copy. It can't stop a paste.</li>
+  </ul>
+  <p class="note">Not a security product. A reminder that catches the obvious things, so you can focus on the rest.</p>
+
+  <h2>Run it</h2>
+  <p>macOS and Python 3.10 or newer. No dependencies.</p>
+  <div class="out">git clone https://github.com/shrinathprofile/paste-guard
+cd paste-guard
+python3 paste_guard.py</div>
+
+  <footer>Check-digit logic follows <a href="https://github.com/microsoft/presidio">Microsoft Presidio</a>'s Australian recognisers. MIT licensed.</footer>
+</main>
+
+<script>
+// ponytail: JS port of paste_guard.py for this demo only; the Python file is the source of truth
+const digits = s => s.replace(/\D/g, "");
+const weighted = (d, ws) => ws.reduce((sum, w, i) => sum + Number(d[i]) * w, 0);
+const luhn = d => [...d].reverse().reduce((t, c, i) => { const n = Number(c) * (i % 2 ? 2 : 1); return t + (n > 9 ? n - 9 : n); }, 0) % 10 === 0;
+const isTfn = d => d.length === 9 && weighted(d, [1, 4, 3, 7, 5, 8, 6, 9, 10]) % 11 === 0;
+const isTfn8 = d => d.length === 8 && weighted(d, [10, 7, 8, 4, 6, 3, 5, 1]) % 11 === 0;
+const isAcn = d => d.length === 9 && (10 - weighted(d, [8, 7, 6, 5, 4, 3, 2, 1]) % 10) % 10 === Number(d[8]);
+const isAbn = d => d.length === 11 && weighted(String(Number(d[0]) - 1) + d.slice(1), [10, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19]) % 89 === 0;
+const isCard = d => d.length >= 13 && d.length <= 19 && luhn(d);
+const isIban = s => { s = s.replace(/ /g, ""); return BigInt([...s.slice(4) + s.slice(0, 4)].map(c => parseInt(c, 36)).join("")) % 97n === 1n; };
+
+const NUMBER_CHECKS = [["TFN", isTfn], ["ACN", isAcn], ["ABN", isAbn], ["CARD", isCard]];
+const DIGIT_RUN = /\b\d(?:[ -]?\d){8,18}\b/g;
+// JS has no scoped (?i:) in every browser, so keyword patterns are fully case-insensitive here
+const ctx = (kw, val) => new RegExp(String.raw`\b(?:${kw})\b(?:[\s:#.-]|(?:file|card|no|num|number)\b)*(?<v>${val})`, "gi");
+const DATE = String.raw`\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}|\d{1,2}\s+[A-Z][a-z]{2,8}\s+\d{4}`;
+const STATES = "NSW|VIC|QLD|SA|WA|TAS|NT|ACT";
+const STREET = "St|Street|Rd|Road|Ave|Avenue|Dr|Drive|Ct|Court|Pl|Place|Cres|Crescent|Tce|Terrace|Hwy|Highway|Pde|Parade|Ln|Lane|Way|Blvd|Boulevard";
+
+const PATTERNS = [
+  ["PRIVATE_KEY", /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g],
+  ["JWT", /\beyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{10,}/g],
+  ["API_KEY", /\b(?:sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36}|xox[abprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35})/g],
+  ["EMAIL", /[\w.+-]+@[\w-]+\.[\w.-]+/g],
+  ["IBAN", /\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,4})?\b/g, isIban],
+  ["TFN", ctx("TFN|tax file", String.raw`\d{3}[ -]?\d{3}[ -]?\d{2}(?!\d)`), s => isTfn8(digits(s))],
+  ["BSB", ctx("BSB", String.raw`\d{3}[- ]?\d{3}\b`)],
+  ["BANK_ACCOUNT", ctx("acc(?:oun)?t|acc", String.raw`\d(?:[ -]?\d){5,9}\b`)],
+  ["PASSPORT", ctx("passport", String.raw`[A-Z]{1,2}\d{7}\b`)],
+  ["DRIVER_LICENCE", ctx(String.raw`driver'?s?\s+licen[cs]e|licen[cs]e|DL`, String.raw`(?=[A-Z0-9]*\d)[A-Z0-9]{6,11}\b`)],
+  ["DOB", ctx(String.raw`DOB|D\.O\.B|date of birth|born(?: on)?`, DATE)],
+  ["CRN", /\b\d{3} ?\d{3} ?\d{3}[A-Za-z]\b/g],
+  ["PHONE", /(?:\+61 ?|\b0)[2-478](?:[ -]?\d){8}\b/g],
+  ["ADDRESS", new RegExp(String.raw`\b\d{1,5}[A-Za-z]?\s+(?:[A-Z][a-z]+\s+){1,3}(?:${STREET})\b|\b(?:${STATES})\s+\d{4}\b`, "g")],
+  ["IP_ADDRESS", /\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/g],
+];
+
+function findSpans(text) {
+  const spans = [];
+  const add = (s, e, label) => { if (!spans.some(([S, E]) => s < E && S < e)) spans.push([s, e, label]); };
+  for (const [label, rx, valid] of PATTERNS) {
+    for (const m of text.matchAll(rx)) {
+      let s = m.index, e = s + m[0].length;
+      if (m.groups?.v !== undefined) s = e - m.groups.v.length;  // keyword patterns end with the value group
+      if (!valid || valid(text.slice(s, e))) add(s, e, label);
+    }
+  }
+  for (const m of text.matchAll(DIGIT_RUN)) {
+    const hit = NUMBER_CHECKS.find(([, ok]) => ok(digits(m[0])));
+    if (hit) add(m.index, m.index + m[0].length, hit[0]);
+  }
+  return spans.sort((a, b) => a[0] - b[0]);
+}
+
+const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const input = document.getElementById("input");
+
+function render() {
+  const text = input.value, spans = findSpans(text);
+  let html = "", redacted = "", at = 0;
+  for (const [s, e, label] of spans) {
+    html += esc(text.slice(at, s)) + `<mark data-label="${label}">${esc(text.slice(s, e))}</mark>`;
+    redacted += text.slice(at, s) + `[${label}]`;
+    at = e;
+  }
+  document.getElementById("highlighted").innerHTML = html + esc(text.slice(at));
+  document.getElementById("redacted").textContent = redacted + text.slice(at);
+  const v = document.getElementById("verdict");
+  const labels = [...new Set(spans.map(s => s[2]))].sort();
+  v.className = "verdict " + (labels.length ? "hit" : "ok");
+  v.textContent = labels.length ? `Dialog would say: Your clipboard contains: ${labels.join(", ")}` : "No dialog. Nothing sensitive found.";
+}
+
+input.addEventListener("input", render);
+document.querySelectorAll(".samples button").forEach(b => b.addEventListener("click", () => { input.value = b.dataset.s; render(); }));
+render();
+</script>
+</body>
+</html>
